@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: pants-api
+    env: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        fromDatabase:
+          name: pants-db
+          property: connectionString
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false # This should be set manually in Render dashboard
+    healthCheckPath: /health
