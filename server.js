@@ -6,6 +6,12 @@ const fetch = require('node-fetch')
 const cheerio = require('cheerio')
 // const puppeteer = require('puppeteer') // Removed for deployment
 const stripe = process.env.STRIPE_SECRET_KEY ? require('stripe')(process.env.STRIPE_SECRET_KEY) : null
+const FirecrawlApp = require('@mendable/firecrawl-js').FirecrawlApp
+
+// Simple Firecrawl availability check
+const isFirecrawlAvailable = () => {
+  return !!process.env.FIRECRAWL_API_KEY
+}
 // Commenting out modules that don't exist in deployment
 // const {
 //   processArchiveWithSharedEmbeddings,
@@ -1386,7 +1392,7 @@ app.get('/api/pocket/status/:userId', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Enhanced Pants server running at http://localhost:${PORT}`)
   console.log('Features: Full HTML archiving, screenshots, Supabase integration, Stripe subscriptions')
-  console.log('Content Extraction: ' + (isFirecrawlAvailable() ? 'Firecrawl + Puppeteer fallback' : 'Puppeteer only'))
+  console.log('Content Extraction: ' + (isFirecrawlAvailable() ? 'Firecrawl + Cheerio fallback' : 'Cheerio only'))
   console.log('RAG Search: ' + (process.env.GEMINI_API_KEY ? 'Enabled with Gemini embeddings + shared content' : 'Text-only mode'))
   console.log('Knowledge Graph: ' + (process.env.GEMINI_API_KEY ? 'Enabled with entity extraction and AI summaries' : 'Disabled - Gemini API key required'))
   console.log('Pocket Import: Enabled with batch processing and rate limiting')
