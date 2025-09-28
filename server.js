@@ -4,27 +4,29 @@ const cors = require('cors')
 const { createClient } = require('@supabase/supabase-js')
 const fetch = require('node-fetch')
 const cheerio = require('cheerio')
-const puppeteer = require('puppeteer')
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
-const {
-  processArchiveWithSharedEmbeddings,
-  hybridSearchWithSharedEmbeddings
-} = require('./gemini-embeddings')
-const {
-  archivePageWithFirecrawl,
-  isFirecrawlAvailable
-} = require('./firecrawl-extractor')
-const {
-  processArticleForKnowledgeGraph,
-  batchProcessArticles
-} = require('./knowledge-graph-extractor')
-const {
-  parsePocketCSV,
-  processPocketImport,
-  validatePocketCSV,
-  getImportStatus,
-  checkForDuplicates
-} = require('./pocket-import')
+// const puppeteer = require('puppeteer') // Removed for deployment
+const stripe = process.env.STRIPE_SECRET_KEY ? require('stripe')(process.env.STRIPE_SECRET_KEY) : null
+// Commenting out modules that don't exist in deployment
+// const {
+//   processArchiveWithSharedEmbeddings,
+//   hybridSearchWithSharedEmbeddings
+// } = require('./gemini-embeddings')
+// const {
+//   archivePageWithFirecrawl,
+//   isFirecrawlAvailable
+// } = require('./firecrawl-extractor')
+// const {
+//   processArticleForKnowledgeGraph,
+//   batchProcessArticles
+// } = require('./knowledge-graph-extractor')
+// Commenting out pocket-import module for deployment
+// const {
+//   parsePocketCSV,
+//   processPocketImport,
+//   validatePocketCSV,
+//   getImportStatus,
+//   checkForDuplicates
+// } = require('./pocket-import')
 // Note: Readability requires jsdom, but we'll use a simpler approach for now
 // const { Readability } = require('@mozilla/readability')
 // const { JSDOM } = require('jsdom')
