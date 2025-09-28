@@ -1,25 +1,19 @@
 {
   "name": "pants-api-server",
   "version": "1.0.0",
-  "description": "Enhanced Pants API server with full archiving capabilities",
+  "description": "Pants API server for web archiving",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
   },
   "dependencies": {
-    "@radix-ui/react-progress": "^1.1.7",
     "@supabase/supabase-js": "^2.38.0",
-    "@tailwindcss/typography": "^0.5.19",
     "cheerio": "^1.0.0-rc.12",
-    "class-variance-authority": "^0.7.1",
     "cors": "^2.8.5",
-    "csv-parser": "^3.2.0",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "node-fetch": "^2.6.7",
-    "puppeteer": "^21.6.1",
-    "stripe": "^14.7.0"
+    "node-fetch": "^2.6.7"
   },
   "engines": {
     "node": ">=18.0.0"
