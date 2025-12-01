@@ -12,27 +12,51 @@ const FirecrawlApp = require('@mendable/firecrawl-js').FirecrawlApp
 const isFirecrawlAvailable = () => {
   return !!process.env.FIRECRAWL_API_KEY
 }
-// Commenting out modules that don't exist in deployment
-// const {
-//   processArchiveWithSharedEmbeddings,
-//   hybridSearchWithSharedEmbeddings
-// } = require('./gemini-embeddings')
-// const {
-//   archivePageWithFirecrawl,
-//   isFirecrawlAvailable
-// } = require('./firecrawl-extractor')
-// const {
-//   processArticleForKnowledgeGraph,
-//   batchProcessArticles
-// } = require('./knowledge-graph-extractor')
-// Commenting out pocket-import module for deployment
-// const {
-//   parsePocketCSV,
-//   processPocketImport,
-//   validatePocketCSV,
-//   getImportStatus,
-//   checkForDuplicates
-// } = require('./pocket-import')
+// Import embedding modules for RAG search
+const {
+  processArchiveWithSharedEmbeddings,
+  hybridSearchWithSharedEmbeddings,
+  generateEmbedding
+} = require('./gemini-embeddings')
+
+// Firecrawl extractor - try to load if available
+let archivePageWithFirecrawl
+try {
+  const firecrawlModule = require('./firecrawl-extractor')
+  archivePageWithFirecrawl = firecrawlModule.archivePageWithFirecrawl
+} catch (err) {
+  console.log('Firecrawl extractor not available, using fallback')
+  archivePageWithFirecrawl = async (url, fallbackFn) => fallbackFn(url)
+}
+
+// Knowledge graph extractor - try to load if available
+let processArticleForKnowledgeGraph = async () => {}
+let batchProcessArticles = async () => []
+try {
+  const kgModule = require('./knowledge-graph-extractor')
+  processArticleForKnowledgeGraph = kgModule.processArticleForKnowledgeGraph
+  batchProcessArticles = kgModule.batchProcessArticles
+} catch (err) {
+  console.log('Knowledge graph extractor not available')
+}
+
+// Pocket import module - try to load if available
+let parsePocketCSV, processPocketImport, validatePocketCSV, getImportStatus, checkForDuplicates
+try {
+  const pocketModule = require('./pocket-import')
+  parsePocketCSV = pocketModule.parsePocketCSV
+  processPocketImport = pocketModule.processPocketImport
+  validatePocketCSV = pocketModule.validatePocketCSV
+  getImportStatus = pocketModule.getImportStatus
+  checkForDuplicates = pocketModule.checkForDuplicates
+} catch (err) {
+  console.log('Pocket import module not available')
+  parsePocketCSV = async () => []
+  processPocketImport = async () => {}
+  validatePocketCSV = () => {}
+  getImportStatus = async () => ({ status: 'unavailable' })
+  checkForDuplicates = async (urls) => ({ newUrls: urls, duplicates: [] })
+}
 // Note: Readability requires jsdom, but we'll use a simpler approach for now
 // const { Readability } = require('@mozilla/readability')
 // const { JSDOM } = require('jsdom')
@@ -841,51 +865,151 @@ async function handleFirstPayment(invoice) {
   console.log('First payment successful for subscription:', invoice.subscription)
 }
 
+// Helper function to extract relevant snippet around search terms
+function extractSnippet(text, query, maxLength = 300) {
+  if (!text) return ''
+
+  const queryTerms = query.toLowerCase().split(/\s+/).filter(t => t.length > 2)
+  const textLower = text.toLowerCase()
+
+  // Find the best position (where most query terms appear nearby)
+  let bestPos = 0
+  let bestScore = 0
+
+  for (let i = 0; i < text.length - 100; i += 50) {
+    const window = textLower.slice(i, i + maxLength)
+    const score = queryTerms.reduce((acc, term) => acc + (window.includes(term) ? 1 : 0), 0)
+    if (score > bestScore) {
+      bestScore = score
+      bestPos = i
+    }
+  }
+
+  // Extract snippet around best position
+  let start = Math.max(0, bestPos - 50)
+  let end = Math.min(text.length, start + maxLength)
+
+  // Adjust to word boundaries
+  if (start > 0) {
+    const spacePos = text.indexOf(' ', start)
+    if (spacePos !== -1 && spacePos < start + 20) start = spacePos + 1
+  }
+  if (end < text.length) {
+    const spacePos = text.lastIndexOf(' ', end)
+    if (spacePos !== -1 && spacePos > end - 20) end = spacePos
+  }
+
+  let snippet = text.slice(start, end).trim()
+  if (start > 0) snippet = '...' + snippet
+  if (end < text.length) snippet = snippet + '...'
+
+  return snippet
+}
+
+// Helper to highlight query terms in text
+function highlightTerms(text, query) {
+  if (!text || !query) return text
+
+  const terms = query.split(/\s+/).filter(t => t.length > 2)
+  let highlighted = text
+
+  terms.forEach(term => {
+    const regex = new RegExp(`(${term})`, 'gi')
+    highlighted = highlighted.replace(regex, '**$1**')
+  })
+
+  return highlighted
+}
+
 // Enhanced search endpoint with RAG capabilities
 app.post('/api/search', async (req, res) => {
   try {
-    const { query, userId, mode = 'hybrid' } = req.body
+    const { query, userId, mode = 'hybrid', limit = 20 } = req.body
 
     if (!query || !userId) {
       return res.status(400).json({ error: 'Query and userId are required' })
     }
 
+    console.log(`🔍 Smart search: "${query}" for user ${userId}`)
+
     // Perform hybrid search (text + semantic if available)
     const results = await hybridSearchWithSharedEmbeddings(query, userId, supabase)
 
-    // Group results by archive
+    // Group results by archive and enrich with snippets
     const groupedResults = {}
-    results.forEach(result => {
-      if (!groupedResults[result.archive_id]) {
-        groupedResults[result.archive_id] = {
-          id: result.archive_id,
-          title: result.title,
-          description: result.description,
-          url: result.url,
-          created_at: result.created_at,
-          relevance_score: result.relevance_score || 0,
-          content_preview: result.content_preview,
-          matching_chunks: []
+
+    for (const result of results) {
+      const archiveId = result.archive_id || result.id
+
+      if (!groupedResults[archiveId]) {
+        // Fetch full archive data if not already present
+        let archiveData = result
+        if (!result.archived_text) {
+          const { data } = await supabase
+            .from('archives')
+            .select('id, url, title, description, archived_text, tags, screenshot_url, created_at')
+            .eq('id', archiveId)
+            .single()
+          if (data) archiveData = { ...result, ...data }
+        }
+
+        // Extract relevant snippet from the content
+        const snippet = extractSnippet(
+          archiveData.archived_text || archiveData.description || '',
+          query,
+          300
+        )
+
+        groupedResults[archiveId] = {
+          id: archiveId,
+          title: archiveData.title || 'Untitled',
+          description: archiveData.description || '',
+          url: archiveData.url,
+          tags: archiveData.tags || [],
+          screenshot_url: archiveData.screenshot_url,
+          created_at: archiveData.created_at,
+          relevance_score: result.relevance_score || result.similarity || 0,
+          snippet: highlightTerms(snippet, query),
+          matching_chunks: [],
+          match_type: result.match_type || (result.similarity ? 'semantic' : 'text')
         }
       }
 
-      if (result.chunk_id) {
-        groupedResults[result.archive_id].matching_chunks.push({
-          content: result.content,
-          similarity: result.similarity
-        })
+      // Add matching chunks if available
+      if (result.chunk_id || result.content) {
+        const chunkContent = result.content || result.chunk_content
+        if (chunkContent) {
+          groupedResults[archiveId].matching_chunks.push({
+            content: highlightTerms(chunkContent.slice(0, 200), query),
+            similarity: result.similarity || 0
+          })
+        }
       }
-    })
+    }
 
-    // Convert to array and sort by relevance
+    // Convert to array, sort by relevance, and limit
     const finalResults = Object.values(groupedResults)
       .sort((a, b) => b.relevance_score - a.relevance_score)
+      .slice(0, parseInt(limit))
+
+    // Calculate search metadata
+    const hasSemanticResults = finalResults.some(r => r.match_type === 'semantic')
+    const avgRelevance = finalResults.length > 0
+      ? finalResults.reduce((acc, r) => acc + r.relevance_score, 0) / finalResults.length
+      : 0
+
+    console.log(`✅ Found ${finalResults.length} results (semantic: ${hasSemanticResults})`)
 
     res.json({
       query: query,
-      mode: mode,
+      mode: hasSemanticResults ? 'hybrid' : 'text',
       results: finalResults,
-      total_count: finalResults.length
+      total_count: finalResults.length,
+      metadata: {
+        semantic_enabled: !!process.env.GEMINI_API_KEY,
+        avg_relevance: Math.round(avgRelevance * 100) / 100,
+        search_time_ms: Date.now() - req._startTime || 0
+      }
     })
   } catch (error) {
     console.error('Search error:', error)
